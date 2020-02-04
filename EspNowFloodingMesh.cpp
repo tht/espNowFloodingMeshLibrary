@@ -47,7 +47,7 @@ bool timeStampCheckDisabled = false;
 uint8_t syncTTL = 0;
 bool isespNowFloodingMeshInitialized = false;
 time_t time_fix_value;
-int myBsid = 0x112233;
+uint32_t myBsid = 0x112233;
 
 #pragma pack(push,1)
 struct header{
@@ -90,7 +90,7 @@ struct meshFrame{
   unencrypted_t unencrypted;
   struct mesh_secred_part encrypted;
 };
-#pragma pack(pop);
+#pragma pack(pop)
 int espNowFloodingMesh_getTTL() {
     return syncTTL;
 }
@@ -103,7 +103,7 @@ static void (*espNowFloodingMesh_receive_cb)(const uint8_t *, int, uint32_t) = N
 
 uint16_t calculateCRC(int c, const unsigned char*b,int len);
 uint16_t calculateCRC(struct meshFrame *m);
-int decrypt(const uint8_t *_from, struct meshFrame *m, int size);
+void decrypt(const uint8_t *_from, struct meshFrame *m, int size);
 bool compareTime(time_t current, time_t received, time_t maxDifference);
 
 
@@ -271,7 +271,7 @@ void espNowFloodingMesh_RecvCB(void (*callback)(const uint8_t *, int, uint32_t))
 }
 
 void espNowFloodingMesh_delay(unsigned long tm) {
-  for(int i=0;i<(tm/10);i++){
+  for(unsigned long i=0;i<(tm/10);i++){
     espNowFloodingMesh_loop();
     delay(10);
   }
@@ -419,7 +419,7 @@ void msg_recv_cb(const uint8_t *data, int len, uint8_t rssi)
       //Serial.println(m.unencrypted.getBsid(), HEX);
       return;
     }
-    if(len>=sizeof(struct meshFrame)) return;
+    if((unsigned long)len>=sizeof(struct meshFrame)) return;
 
     int messageStatus = rejectedMessageDB.isMessageInHandledList(&m);
     if(messageStatus==1) {
@@ -442,7 +442,6 @@ void msg_recv_cb(const uint8_t *data, int len, uint8_t rssi)
     }
     if(m.encrypted.header.length>=0 && m.encrypted.header.length < (sizeof(m.encrypted.data) ) ){
       uint16_t crc = m.unencrypted.crc16;
-      int messageLengtWithHeader = m.encrypted.header.length + sizeof(struct header);
       uint16_t crc16 = calculateCRC(&m);
 
         #ifdef DEBUG_PRINTS
@@ -609,7 +608,7 @@ void espNowFloodingMesh_secredkey(const unsigned char key[16]){
   memcpy(aes_secredKey, key, sizeof(aes_secredKey));
 }
 
-int decrypt(const uint8_t *_from, struct meshFrame *m, int size) {
+void decrypt(const uint8_t *_from, struct meshFrame *m, int size) {
   unsigned char iv[16];
   memcpy(iv,ivKey,sizeof(iv));
 
@@ -710,7 +709,7 @@ bool forwardMsg(const uint8_t *data, int len) {
 
 uint32_t sendMsg(uint8_t* msg, int size, int ttl, int msgId, void *ptr) {
   uint32_t ret=0;
-  if(size>=sizeof(struct mesh_secred_part)) {
+  if((unsigned long)size>=sizeof(struct mesh_secred_part)) {
     #ifdef DEBUG_PRINTS
     Serial.println("espNowFloodingMesh_send: Invalid size");
     #endif
@@ -805,7 +804,7 @@ bool espNowFloodingMesh_sendAndWaitReply(uint8_t* msg, int size, int ttl, int tr
         return true; //OK all received;
       }
       unsigned long elapsed = millis()-dbtm;
-      if(elapsed>timeoutMs) {
+      if(elapsed>(unsigned long)timeoutMs) {
         //timeout
         print(0, "Timeout: waiting replies");
         break;
@@ -829,7 +828,7 @@ bool espNowFloodingMesh_syncWithMasterAndWait(int timeoutMs, int tryCount) {
           return true; //OK all received;
         }
         unsigned long elapsed = millis()-dbtm;
-        if(elapsed>timeoutMs) {
+        if(elapsed>(unsigned long)timeoutMs) {
           break;
         }
       }

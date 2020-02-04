@@ -41,6 +41,7 @@
 
     //Run this only in Mainloop!!!
     bool espNowFloodingMesh_sendAndWaitReply(uint8_t* msg, int size, int ttl, int tryCount=1, void (*f)(const uint8_t *, int)=NULL, int timeoutMs=3000, int expectedCountOfReplies=1); //Max message length is 236byte
+    void espNowFloodingMesh_requestInstantTimeSyncFromMaster();
     bool espNowFloodingMesh_syncWithMasterAndWait(int timeoutMs=3000, int tryCount=3);
 
     void espNowFloodingMesh_sendReply(uint8_t* msg, int size, int ttl, uint32_t replyIdentifier);

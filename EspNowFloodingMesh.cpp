@@ -6,55 +6,52 @@
   #include <rom/crc.h>
   #include "mbedtls/aes.h"
 #else
-#include <ESP8266WiFi.h>
-#include "AESLib.h" //From https://github.com/kakopappa/arduino-esp8266-aes-lib
+  #include <ESP8266WiFi.h>
+  #include "AESLib.h" //From https://github.com/kakopappa/arduino-esp8266-aes-lib
 #endif
-#include "AESLib.h" //From https://github.com/kakopappa/arduino-esp8266-aes-lib
 
 #ifndef USE_RAW_801_11
-    #include "espnowBroadcast.h"
+  #include "espnowBroadcast.h"
+#else
+  #include "wifi802_11.h"
 #endif
+
 #include "EspNowFloodingMesh.h"
 #include <time.h>
-
-#ifdef USE_RAW_801_11
-#include "wifi802_11.h"
-#endif
 
 #define AES_BLOCK_SIZE  16
 #define DISPOSABLE_KEY_LENGTH AES_BLOCK_SIZE
 #define REJECTED_LIST_SIZE 50
 #define REQUEST_REPLY_DATA_BASE_SIZE 20
-
-#define ALLOW_TIME_ERROR_IN_SYNC_MESSAGE false //Decrease secure. false=Validate sync messages against own RTC time
-
-
+#define ALLOW_TIME_ERROR_IN_SYNC_MESSAGE false // false=Validate sync messages against own RTC time
 #define RESEND_SYNC_TIME_MS 10000
 
-#define USER_MSG 1
-#define SYNC_TIME_MSG 2
-#define INSTANT_TIME_SYNC_REQ 3
-#define USER_REQUIRE_RESPONSE_MSG 4
-#define USER_REQUIRE_REPLY_MSG 5
+enum messagetype_t {
+  USER_MSG = 1,
+  SYNC_TIME_MSG,
+  INSTANT_TIME_SYNC_REQ,
+  USER_REQUIRE_RESPONSE_MSG,
+  USER_REQUIRE_REPLY_MSG
+};
 
-
+uint8_t aes_secredKey[] = {0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE, 0xFF};
 unsigned char ivKey[16] = {0xb2, 0x4b, 0xf2, 0xf7, 0x7a, 0xc5, 0xec, 0x0c, 0x5e, 0x1f, 0x4d, 0xc1, 0xae, 0x46, 0x5e, 0x75};
 
-bool masterFlag = false;
+bool masterFlag = false;  // is this the (single) master node?
 bool syncronized = false;
-bool batteryNode = false;
-bool timeStampCheckDisabled = false;
-uint8_t syncTTL = 0;
-bool isespNowFloodingMeshInitialized = false;
-time_t time_fix_value;
+bool batteryNode = false; // is this node battery powered? Disables routing of messages.
+bool timeStampCheckDisabled = false;  // set to true to disable checking for valid timestamps in received messages
+uint8_t syncTTL = 0;      // TTL for time-sync messages – is reset if node gets declared as master
+bool isespNowFloodingMeshInitialized = false; // set to true when "begin" is called
 uint32_t myBsid = 0x112233;
+const unsigned char broadcast_mac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
-#pragma pack(push,1)
+#pragma pack(push,1) // specify alignment of following structs
 struct header{
-uint8_t msgId;
-uint8_t length;
-uint32_t p1;
-time_t time;
+  uint8_t msgId;
+  uint8_t length;
+  uint32_t p1;
+  time_t time;
 };
 
 struct mesh_secred_part{
@@ -67,48 +64,48 @@ struct mesh_unencrypted_part{
   uint8_t ttl;
   uint16_t crc16;
   void setBsid(uint32_t v) {
-      bsid[0]=(v>>(16))&0xff;
-      bsid[1]=(v>>(8))&0xff;
-      bsid[2]=v&0xff;
+    bsid[0]=(v>>(16))&0xff;
+    bsid[1]=(v>>(8))&0xff;
+    bsid[2]=v&0xff;
   }
-   void set(const uint8_t *v) {
-      memcpy(this,v,sizeof(struct mesh_unencrypted_part));
+  void set(const uint8_t *v) {
+    memcpy(this,v,sizeof(struct mesh_unencrypted_part));
   }
   uint32_t getBsid(){
-      uint32_t ret=0;
-      ret|=((uint32_t)bsid[0])<<16;
-      ret|=((uint32_t)bsid[1])<<8;
-      ret|=((uint32_t)bsid[2]);
-      return ret;
+    uint32_t ret=0;
+    ret|=((uint32_t)bsid[0])<<16;
+    ret|=((uint32_t)bsid[1])<<8;
+    ret|=((uint32_t)bsid[2]);
+    return ret;
   }
 };
 typedef struct mesh_unencrypted_part unencrypted_t;
 #define SECRED_PART_OFFSET sizeof(unencrypted_t)
-
 
 struct meshFrame{
   unencrypted_t unencrypted;
   struct mesh_secred_part encrypted;
 };
 #pragma pack(pop)
-int espNowFloodingMesh_getTTL() {
-    return syncTTL;
-}
-const unsigned char broadcast_mac[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-uint8_t aes_secredKey[] = {0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC,0xDD,0xEE, 0xFF};
+
+// Callback function definitions
+static void (*espNowFloodingMesh_receive_cb)(const uint8_t *, int, uint32_t) = NULL;
+void (*errorPrintCB)(int,const char *) = NULL;
+
+
+// Declarations of methods
 bool forwardMsg(const uint8_t *data, int len);
 uint32_t sendMsg(uint8_t* msg, int size, int ttl, int msgId, void *ptr=NULL);
 void hexDump(const uint8_t*b,int len);
-static void (*espNowFloodingMesh_receive_cb)(const uint8_t *, int, uint32_t) = NULL;
-
 uint16_t calculateCRC(int c, const unsigned char*b,int len);
 uint16_t calculateCRC(struct meshFrame *m);
 void decrypt(const uint8_t *_from, struct meshFrame *m, int size);
 bool compareTime(time_t current, time_t received, time_t maxDifference);
 
 
-
-void (*errorPrintCB)(int,const char *) = NULL;
+int espNowFloodingMesh_getTTL() {
+  return syncTTL;
+}
 
 void espNowFloodingMesh_ErrorDebugCB(void (*callback)(int, const char *)){
     errorPrintCB = callback;
@@ -120,18 +117,17 @@ void espNowFloodingMesh_disableTimeDifferenceCheck(bool disable) {
         syncronized = true;
     }
 }
-void print(int level, const char * format, ... )
-{
 
- if(errorPrintCB){
-      static char buffer[256];
-      va_list args;
-      va_start (args, format);
-      vsprintf (buffer,format, args);
+void print(int level, const char * format, ... ) {
+  if(errorPrintCB){
+    static char buffer[256];
+    va_list args;
+    va_start (args, format);
+    vsprintf (buffer,format, args);
 
-      errorPrintCB(level, buffer);
+    errorPrintCB(level, buffer);
 
-      va_end (args);
+    va_end (args);
   }
 }
 
@@ -281,8 +277,7 @@ void espNowFloodingMesh_loop(){
   if(isespNowFloodingMeshInitialized==false) return;
   if(masterFlag) {
       static unsigned long start = 0;
-      unsigned long elapsed = millis()-start;
-      if(elapsed>=RESEND_SYNC_TIME_MS) { //10s
+      if(millis()-start >= RESEND_SYNC_TIME_MS) { //10s
         start = millis();
         #ifdef DEBUG_PRINTS
         Serial.println("Send time sync message!!");
@@ -457,8 +452,8 @@ void msg_recv_cb(const uint8_t *data, int len, uint8_t rssi)
           if(!compareTime(currentTime,m.encrypted.header.time, MAX_ALLOWED_TIME_DIFFERENCE_IN_MESSAGES)) {
               messageTimeOk = false;
               print(1,"Received message with invalid time stamp.");
-            //  Serial.print("CurrentTime:");Serial.println(currentTime);
-            //  Serial.print("ReceivedTime:");Serial.println(m.encrypted.header.time);
+              Serial.print("CurrentTime:");Serial.println(currentTime);
+              Serial.print("ReceivedTime:");Serial.println(m.encrypted.header.time);
           }
 
           bool ok = false;
@@ -815,7 +810,7 @@ bool espNowFloodingMesh_sendAndWaitReply(uint8_t* msg, int size, int ttl, int tr
 }
 
 bool espNowFloodingMesh_syncWithMasterAndWait(int timeoutMs, int tryCount) {
-  if(masterFlag || timeStampCheckDisabled) return true;
+  if(masterFlag) return true;
   syncronized = false;
   for(int i=0;i<tryCount;i++) {
       unsigned long dbtm = millis();
